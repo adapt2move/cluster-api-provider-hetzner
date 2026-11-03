@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"slices"
 	"strings"
 	"time"
@@ -86,6 +87,15 @@ func (s *Service) Reconcile(ctx context.Context) (reconcile.Result, error) {
 				return reconcile.Result{}, fmt.Errorf("failed to own existing load balancer (name=%s): %w", *s.scope.HetznerCluster.Spec.ControlPlaneLoadBalancer.Name, err)
 			}
 		} else {
+			// Hetzner only accepts a load balancer without public interface if it is attached to a
+			// network when it is created. The network is reconciled before the load balancer, so
+			// its status is normally already there.
+			if s.scope.HetznerCluster.Spec.ControlPlaneLoadBalancer.PublicInterfaceDisabled() && s.scope.HetznerCluster.Status.Network == nil {
+				const msg = "waiting for the network before creating a load balancer without public interface"
+				s.markWaitingForNetwork(msg)
+				log.V(1).Info(msg)
+				return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
+			}
 			lb, err = s.createLoadBalancer(ctx)
 			if err != nil {
 				if errors.Is(err, ErrControlPlaneEndpointNotSet) {
@@ -144,6 +154,13 @@ func (s *Service) Reconcile(ctx context.Context) (reconcile.Result, error) {
 		return reconcile.Result{}, fmt.Errorf("failed to reconcile network attachment: %w", err)
 	}
 
+	// The public interface is reconciled after the network attachment, because Hetzner only
+	// disables it on a load balancer that is attached to a network.
+	publicInterfaceRes, err := s.reconcilePublicInterface(ctx, lb)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to reconcile public interface: %w", err)
+	}
+
 	if res, err := s.reconcileServices(ctx, lb); err != nil {
 		v1beta1conditions.MarkFalse(
 			s.scope.HetznerCluster,
@@ -164,6 +181,10 @@ func (s *Service) Reconcile(ctx context.Context) (reconcile.Result, error) {
 		return reconcile.Result{}, fmt.Errorf("failed to reconcile services: %w", err)
 	} else if res != (reconcile.Result{}) {
 		return res, nil
+	}
+
+	if publicInterfaceRes != (reconcile.Result{}) {
+		return publicInterfaceRes, nil
 	}
 
 	v1beta1conditions.MarkTrue(s.scope.HetznerCluster, infrav1.LoadBalancerReadyCondition)
@@ -247,6 +268,95 @@ func (s *Service) reconcileNetworkAttachement(ctx context.Context, lb *hcloud.Lo
 	}
 
 	return nil
+}
+
+// reconcilePublicInterface enables or disables the public interface of an existing load balancer
+// so that it matches spec.controlPlaneLoadBalancer.publicInterface. A spec that does not set the
+// field leaves the load balancer as it is.
+//
+// Hetzner only disables the public interface of a load balancer that is attached to a network.
+// lb is the state from the start of the reconcile, so a load balancer that reconcileNetworkAttachement
+// attached in this reconcile still has no private network here. In that case this function
+// requeues, and the next reconcile disables the public interface.
+func (s *Service) reconcilePublicInterface(ctx context.Context, lb *hcloud.LoadBalancer) (reconcile.Result, error) {
+	switch s.scope.HetznerCluster.Spec.ControlPlaneLoadBalancer.PublicInterface {
+	case infrav1.LoadBalancerPublicInterfaceDisabled:
+		if !lb.PublicNet.Enabled {
+			return reconcile.Result{}, nil
+		}
+
+		if len(lb.PrivateNet) == 0 {
+			const msg = "waiting for the load balancer to be attached to the network before disabling its public interface"
+			s.markWaitingForNetwork(msg)
+			s.scope.V(1).Info(msg)
+			return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+
+		if err := s.scope.HCloudClient.DisableLoadBalancerPublicInterface(ctx, lb); err != nil {
+			hcloudutil.HandleRateLimitExceeded(s.scope.HetznerCluster, err, "DisableLoadBalancerPublicInterface")
+			return reconcile.Result{}, s.markPublicInterfaceUpdateFailed(fmt.Errorf("failed to disable public interface of load balancer: %w", err))
+		}
+
+		record.Event(s.scope.HetznerCluster, "DisableLoadBalancerPublicInterface", "Disabled public interface of load balancer")
+
+	case infrav1.LoadBalancerPublicInterfaceEnabled:
+		if lb.PublicNet.Enabled {
+			return reconcile.Result{}, nil
+		}
+
+		if err := s.scope.HCloudClient.EnableLoadBalancerPublicInterface(ctx, lb); err != nil {
+			hcloudutil.HandleRateLimitExceeded(s.scope.HetznerCluster, err, "EnableLoadBalancerPublicInterface")
+			return reconcile.Result{}, s.markPublicInterfaceUpdateFailed(fmt.Errorf("failed to enable public interface of load balancer: %w", err))
+		}
+
+		record.Event(s.scope.HetznerCluster, "EnableLoadBalancerPublicInterface", "Enabled public interface of load balancer")
+	}
+
+	return reconcile.Result{}, nil
+}
+
+// markPublicInterfaceUpdateFailed emits a warning event, sets the load balancer conditions to
+// false and returns err.
+func (s *Service) markPublicInterfaceUpdateFailed(err error) error {
+	record.Warn(s.scope.HetznerCluster, "FailedUpdateLoadBalancerPublicInterface", err.Error())
+
+	v1beta1conditions.MarkFalse(
+		s.scope.HetznerCluster,
+		infrav1.LoadBalancerReadyCondition,
+		infrav1.LoadBalancerUpdateFailedReason,
+		clusterv1beta1.ConditionSeverityWarning,
+		"%s",
+		err.Error(),
+	)
+
+	v1beta2conditions.Set(s.scope.HetznerCluster, metav1.Condition{
+		Type:    infrav1.HetznerClusterLoadBalancerReadyV1Beta2Condition,
+		Status:  metav1.ConditionFalse,
+		Reason:  infrav1.HetznerClusterLoadBalancerUpdateFailedV1Beta2Reason,
+		Message: err.Error(),
+	})
+
+	return err
+}
+
+// markWaitingForNetwork sets the load balancer conditions to false while a load balancer
+// without public interface waits for the network.
+func (s *Service) markWaitingForNetwork(msg string) {
+	v1beta1conditions.MarkFalse(
+		s.scope.HetznerCluster,
+		infrav1.LoadBalancerReadyCondition,
+		infrav1.LoadBalancerWaitingForNetworkReason,
+		clusterv1beta1.ConditionSeverityInfo,
+		"%s",
+		msg,
+	)
+
+	v1beta2conditions.Set(s.scope.HetznerCluster, metav1.Condition{
+		Type:    infrav1.HetznerClusterLoadBalancerReadyV1Beta2Condition,
+		Status:  metav1.ConditionFalse,
+		Reason:  infrav1.HetznerClusterLoadBalancerWaitingForNetworkV1Beta2Reason,
+		Message: msg,
+	})
 }
 
 func (s *Service) reconcileLBProperties(ctx context.Context, lb *hcloud.LoadBalancer) error {
@@ -755,7 +865,9 @@ func createOptsFromSpec(hc *infrav1.HetznerCluster) (hcloud.LoadBalancerCreateOp
 	}
 
 	listenPort := int(hc.Spec.ControlPlaneEndpoint.Port)
-	publicInterface := true
+	// Hetzner requires network to be set when the public interface is disabled. The caller makes
+	// sure that the network status exists in that case.
+	publicInterface := !hc.Spec.ControlPlaneLoadBalancer.PublicInterfaceDisabled()
 	return hcloud.LoadBalancerCreateOpts{
 		LoadBalancerType: &hcloud.LoadBalancerType{Name: hc.Spec.ControlPlaneLoadBalancer.Type},
 		Name:             name,
@@ -988,7 +1100,7 @@ func kubeAPIServicePortFromSpec(hc *infrav1.HetznerCluster) int {
 func statusFromHCloudLB(lb *hcloud.LoadBalancer, hasNetwork bool, kubeAPIServicePort int, log logr.Logger) *infrav1.LoadBalancerStatus {
 	var internalIP string
 	if hasNetwork && len(lb.PrivateNet) > 0 {
-		internalIP = lb.PrivateNet[0].IP.String()
+		internalIP = ipString(lb.PrivateNet[0].IP)
 	}
 
 	targetObjects := make([]infrav1.LoadBalancerTarget, 0, len(lb.Targets))
@@ -1021,11 +1133,20 @@ func statusFromHCloudLB(lb *hcloud.LoadBalancer, hasNetwork bool, kubeAPIService
 
 	return &infrav1.LoadBalancerStatus{
 		ID:                   lb.ID,
-		IPv4:                 lb.PublicNet.IPv4.IP.String(),
-		IPv6:                 lb.PublicNet.IPv6.IP.String(),
+		IPv4:                 ipString(lb.PublicNet.IPv4.IP),
+		IPv6:                 ipString(lb.PublicNet.IPv6.IP),
 		InternalIP:           internalIP,
 		Target:               targetObjects,
 		Protected:            lb.Protection.Delete,
 		ProxyProtocolEnabled: proxyProtocolEnabled,
 	}
+}
+
+// ipString returns the string form of ip, or an empty string if ip is not set. net.IP.String
+// returns "<nil>" for an IP that is not set, and that is not an address.
+func ipString(ip net.IP) string {
+	if len(ip) == 0 {
+		return ""
+	}
+	return ip.String()
 }

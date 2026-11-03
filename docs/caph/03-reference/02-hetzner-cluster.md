@@ -25,6 +25,49 @@ Using `controlPlaneLoadBalancer.enabled=false` prevents the creation of a hcloud
 
 If you are using your own load balancer, you need to point towards it and configure the load balancer to target the control planes of the cluster.
 
+## Control plane load balancer without public interface
+
+Hetzner Cloud firewalls do not apply to load balancers. With the default settings, the
+kube-apiserver port of the control plane load balancer is therefore reachable from the internet.
+Set `controlPlaneLoadBalancer.publicInterface: disabled` to run the load balancer without a public
+IPv4 and IPv6 address, so that it is only reachable over the private network of the cluster.
+
+```yaml
+spec:
+  hcloudNetwork:
+    enabled: true
+  controlPlaneLoadBalancer:
+    enabled: true
+    publicInterface: disabled
+```
+
+This requires `hcloudNetwork.enabled: true`, because Hetzner only accepts a load balancer without
+public interface if it is attached to a network. Every client of the kube-apiserver has to reach
+the load balancer over that network. That includes the CAPI and CAPH controllers in the management
+cluster, for example through a VPN, or because the management cluster runs in the same network.
+
+If `controlPlaneEndpoint.host` is empty, CAPH sets it to the private IP of the load balancer. A host
+that is already set is never changed.
+
+`publicInterface` accepts `enabled` and `disabled`. If it is not set, a new load balancer is created
+with a public interface, and CAPH does not change the public interface of an existing load
+balancer.
+
+### Disabling the public interface on an existing cluster
+
+The field can be changed on an existing cluster. CAPH then disables (or enables) the public
+interface of the existing load balancer in place, after the load balancer is attached to the
+network. CAPH does not change anything else, in particular:
+
+- `controlPlaneEndpoint.host` keeps its value. On a cluster that was created with a public load
+  balancer, it is the public IPv4 address, and the API server is no longer reachable on it.
+- The certificate SANs of the kube-apiserver are not changed. The private IP of the load balancer
+  (or a DNS name that resolves to it) has to be in the certificate before clients can use it.
+- The kubeconfig secret of the cluster (`<cluster>-kubeconfig`) keeps the old server address.
+
+Plan these changes before you disable the public interface. A practical approach is to use a DNS
+name as `controlPlaneEndpoint.host` that you can point to the private IP.
+
 ## HTTP(S) health checks for the control plane load balancer
 
 By default the Hetzner load balancer checks the kube-apiserver service with a plain TCP check: it
@@ -222,6 +265,10 @@ Defines destination port. Must be in range 1-65535.
 
 </Collapsible>
 
+</PropField>
+
+<PropField name="controlPlaneLoadBalancer.publicInterface" type="string" required={false}>
+Whether the load balancer has a public interface. One of `enabled`, `disabled`. `disabled` requires `hcloudNetwork.enabled` and makes the load balancer reachable over the private network only. If not set, a new load balancer gets a public interface and an existing one is not changed. See [Control plane load balancer without public interface](#control-plane-load-balancer-without-public-interface).
 </PropField>
 
 <PropField name="controlPlaneLoadBalancer.enableProxyProtocol" type="bool" defaultValue="false" required={false}>

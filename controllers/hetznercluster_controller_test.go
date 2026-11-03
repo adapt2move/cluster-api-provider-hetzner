@@ -1939,4 +1939,104 @@ func TestSetControlPlaneEndpoint(t *testing.T) {
 			t.Fatalf("return value should be true")
 		}
 	})
+
+	privateLBCluster := func(host string, internalIP string) *infrav1.HetznerCluster {
+		return &infrav1.HetznerCluster{
+			Spec: infrav1.HetznerClusterSpec{
+				ControlPlaneLoadBalancer: infrav1.LoadBalancerSpec{
+					Enabled:         true,
+					Port:            6443,
+					PublicInterface: infrav1.LoadBalancerPublicInterfaceDisabled,
+				},
+				ControlPlaneEndpoint: &clusterv1beta1.APIEndpoint{Host: host},
+			},
+			Status: infrav1.HetznerClusterStatus{
+				ControlPlaneLoadBalancer: &infrav1.LoadBalancerStatus{
+					IPv4:       "1.2.3.4",
+					InternalIP: internalIP,
+				},
+			},
+		}
+	}
+
+	t.Run("uses the internal IP as host if the public interface is disabled and the host is empty", func(t *testing.T) {
+		hetznerCluster := privateLBCluster("", "10.0.0.2")
+
+		processControlPlaneEndpoint(hetznerCluster)
+
+		if hetznerCluster.Spec.ControlPlaneEndpoint.Host != "10.0.0.2" {
+			t.Fatalf("Wrong value for Host set. Got: %s, Want: 10.0.0.2", hetznerCluster.Spec.ControlPlaneEndpoint.Host)
+		}
+		if hetznerCluster.Spec.ControlPlaneEndpoint.Port != 6443 {
+			t.Fatalf("Wrong value for Port set. Got: %d, Want: 6443", hetznerCluster.Spec.ControlPlaneEndpoint.Port)
+		}
+		if hetznerCluster.Status.Ready != true {
+			t.Fatalf("return value should be true")
+		}
+	})
+
+	t.Run("uses the internal IP as host if the public interface is disabled and the endpoint is nil", func(t *testing.T) {
+		hetznerCluster := privateLBCluster("", "10.0.0.2")
+		hetznerCluster.Spec.ControlPlaneEndpoint = nil
+
+		processControlPlaneEndpoint(hetznerCluster)
+
+		if hetznerCluster.Spec.ControlPlaneEndpoint == nil || hetznerCluster.Spec.ControlPlaneEndpoint.Host != "10.0.0.2" {
+			t.Fatalf("Wrong value for ControlPlaneEndpoint set. Got: %+v, Want host 10.0.0.2", hetznerCluster.Spec.ControlPlaneEndpoint)
+		}
+		if hetznerCluster.Status.Ready != true {
+			t.Fatalf("return value should be true")
+		}
+	})
+
+	t.Run("does not overwrite a host that is already set if the public interface is disabled", func(t *testing.T) {
+		hetznerCluster := privateLBCluster("1.2.3.4", "10.0.0.2")
+
+		processControlPlaneEndpoint(hetznerCluster)
+
+		if hetznerCluster.Spec.ControlPlaneEndpoint.Host != "1.2.3.4" {
+			t.Fatalf("Host should not change. Got: %s, Want: 1.2.3.4", hetznerCluster.Spec.ControlPlaneEndpoint.Host)
+		}
+		if hetznerCluster.Status.Ready != true {
+			t.Fatalf("return value should be true")
+		}
+	})
+
+	t.Run("waits for the internal IP if the public interface is disabled", func(t *testing.T) {
+		hetznerCluster := privateLBCluster("", "")
+
+		processControlPlaneEndpoint(hetznerCluster)
+
+		if *hetznerCluster.Spec.ControlPlaneEndpoint != (clusterv1beta1.APIEndpoint{}) {
+			t.Fatalf("ControlPlaneEndpoint should not change while the internal IP is unknown. Got: %+v", hetznerCluster.Spec.ControlPlaneEndpoint)
+		}
+		if hetznerCluster.Status.Ready != false {
+			t.Fatalf("return value should be false")
+		}
+		if !v1beta1conditions.IsFalse(hetznerCluster, infrav1.ControlPlaneEndpointSetCondition) {
+			t.Fatalf("ControlPlaneEndpointSet should be False")
+		}
+	})
+
+	t.Run("return false if load balancer is enabled and IPv4 is empty. ControlPlaneEndpoint should not change", func(t *testing.T) {
+		hetznerCluster := &infrav1.HetznerCluster{
+			Spec: infrav1.HetznerClusterSpec{
+				ControlPlaneLoadBalancer: infrav1.LoadBalancerSpec{
+					Enabled: true,
+				},
+			},
+			Status: infrav1.HetznerClusterStatus{
+				ControlPlaneLoadBalancer: &infrav1.LoadBalancerStatus{InternalIP: "10.0.0.2"},
+			},
+		}
+
+		processControlPlaneEndpoint(hetznerCluster)
+
+		if hetznerCluster.Spec.ControlPlaneEndpoint != nil {
+			t.Fatalf("ControlPlaneEndpoint should not change. Got: %+v", hetznerCluster.Spec.ControlPlaneEndpoint)
+		}
+		if hetznerCluster.Status.Ready != false {
+			t.Fatalf("return value should be false")
+		}
+	})
 }

@@ -47,6 +47,8 @@ type Client interface {
 	ChangeLoadBalancerType(context.Context, *hcloud.LoadBalancer, hcloud.LoadBalancerChangeTypeOpts) error
 	ChangeLoadBalancerAlgorithm(context.Context, *hcloud.LoadBalancer, hcloud.LoadBalancerChangeAlgorithmOpts) error
 	UpdateLoadBalancer(context.Context, *hcloud.LoadBalancer, hcloud.LoadBalancerUpdateOpts) (*hcloud.LoadBalancer, error)
+	EnableLoadBalancerPublicInterface(context.Context, *hcloud.LoadBalancer) error
+	DisableLoadBalancerPublicInterface(context.Context, *hcloud.LoadBalancer) error
 	AddTargetServerToLoadBalancer(context.Context, hcloud.LoadBalancerAddServerTargetOpts, *hcloud.LoadBalancer) error
 	DeleteTargetServerOfLoadBalancer(context.Context, *hcloud.LoadBalancer, *hcloud.Server) error
 	AddIPTargetToLoadBalancer(context.Context, hcloud.LoadBalancerAddIPTargetOpts, *hcloud.LoadBalancer) error
@@ -183,6 +185,16 @@ func (c *realClient) ChangeLoadBalancerAlgorithm(ctx context.Context, lb *hcloud
 func (c *realClient) UpdateLoadBalancer(ctx context.Context, lb *hcloud.LoadBalancer, opts hcloud.LoadBalancerUpdateOpts) (*hcloud.LoadBalancer, error) {
 	res, _, err := c.client.LoadBalancer.Update(ctx, lb, opts)
 	return res, err
+}
+
+func (c *realClient) EnableLoadBalancerPublicInterface(ctx context.Context, lb *hcloud.LoadBalancer) error {
+	_, _, err := c.client.LoadBalancer.EnablePublicInterface(ctx, lb)
+	return err
+}
+
+func (c *realClient) DisableLoadBalancerPublicInterface(ctx context.Context, lb *hcloud.LoadBalancer) error {
+	_, _, err := c.client.LoadBalancer.DisablePublicInterface(ctx, lb)
+	return err
 }
 
 func (c *realClient) AddTargetServerToLoadBalancer(ctx context.Context, opts hcloud.LoadBalancerAddServerTargetOpts, lb *hcloud.LoadBalancer) error {

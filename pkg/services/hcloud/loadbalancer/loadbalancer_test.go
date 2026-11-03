@@ -331,6 +331,30 @@ var _ = Describe("createOptsFromSpec", func() {
 		Expect(createOpts).To(Equal(wantCreateOpts))
 	})
 
+	It("creates the load balancer without public interface when it is disabled", func() {
+		hetznerCluster.Spec.ControlPlaneLoadBalancer.PublicInterface = infrav1.LoadBalancerPublicInterfaceDisabled
+		wantCreateOpts.PublicInterface = ptr.To(false)
+
+		createOpts, err := createOptsFromSpec(hetznerCluster)
+		Expect(err).To(BeNil())
+
+		// ignore random name
+		createOpts.Name = ""
+
+		// Hetzner rejects a load balancer without public interface that is not attached to a network.
+		Expect(createOpts.Network).To(Equal(&hcloud.Network{ID: hetznerCluster.Status.Network.ID}))
+		Expect(createOpts).To(Equal(wantCreateOpts))
+	})
+
+	It("creates the load balancer with public interface when it is explicitly enabled", func() {
+		hetznerCluster.Spec.ControlPlaneLoadBalancer.PublicInterface = infrav1.LoadBalancerPublicInterfaceEnabled
+
+		createOpts, err := createOptsFromSpec(hetznerCluster)
+		Expect(err).To(BeNil())
+
+		Expect(createOpts.PublicInterface).To(Equal(ptr.To(true)))
+	})
+
 	It("creates the kube-apiserver service with proxy protocol on when EnableProxyProtocol is true", func() {
 		hetznerCluster.Spec.ControlPlaneLoadBalancer.EnableProxyProtocol = true
 		proxyprotocol := true
