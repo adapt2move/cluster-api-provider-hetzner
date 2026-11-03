@@ -18,6 +18,7 @@ package v1beta2
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -130,6 +131,8 @@ func (*HetznerClusterWebhook) ValidateCreate(_ context.Context, r *infrav1.Hetzn
 		allErrs = append(allErrs, err)
 	}
 
+	allErrs = append(allErrs, validateLoadBalancerPublicInterface(r.Spec)...)
+
 	return nil, aggregateObjErrors(r.GroupVersionKind().GroupKind(), r.Name, allErrs)
 }
 
@@ -209,7 +212,45 @@ func (*HetznerClusterWebhook) ValidateUpdate(_ context.Context, oldC, r *infrav1
 		allErrs = append(allErrs, err)
 	}
 
-	return nil, aggregateObjErrors(r.GroupVersionKind().GroupKind(), r.Name, allErrs)
+	allErrs = append(allErrs, validateLoadBalancerPublicInterface(r.Spec)...)
+
+	// Disabling the public interface of an existing cluster is allowed, but the endpoint is not
+	// changed, so warn that it might still point to the public IP.
+	var warnings admission.Warnings
+	if !oldC.Spec.ControlPlaneLoadBalancer.PublicInterfaceDisabled() && r.Spec.ControlPlaneLoadBalancer.PublicInterfaceDisabled() &&
+		r.Spec.ControlPlaneEndpoint.Host != "" {
+		warnings = append(warnings, fmt.Sprintf(
+			"spec.controlPlaneLoadBalancer.publicInterface is set to disabled, but spec.controlPlaneEndpoint.host %q is not changed. "+
+				"If it is the public IP of the load balancer, the API server is no longer reachable on it once the public interface is disabled. "+
+				"The certificate SANs and the kubeconfig secret are not changed either",
+			r.Spec.ControlPlaneEndpoint.Host))
+	}
+
+	return warnings, aggregateObjErrors(r.GroupVersionKind().GroupKind(), r.Name, allErrs)
+}
+
+// validateLoadBalancerPublicInterface checks that a load balancer without public interface can
+// work. The load balancer has to be enabled, and it needs the private network, because Hetzner
+// only accepts a load balancer without public interface if it is attached to a network.
+func validateLoadBalancerPublicInterface(spec infrav1.HetznerClusterSpec) field.ErrorList {
+	if !spec.ControlPlaneLoadBalancer.PublicInterfaceDisabled() {
+		return nil
+	}
+
+	var allErrs field.ErrorList
+	path := field.NewPath("spec", "controlPlaneLoadBalancer", "publicInterface")
+
+	if !ptr.Deref(spec.ControlPlaneLoadBalancer.Enabled, false) {
+		allErrs = append(allErrs, field.Invalid(path, spec.ControlPlaneLoadBalancer.PublicInterface,
+			"publicInterface can only be disabled if controlPlaneLoadBalancer.enabled is true"))
+	}
+
+	if !ptr.Deref(spec.HCloudNetwork.Enabled, false) {
+		allErrs = append(allErrs, field.Invalid(path, spec.ControlPlaneLoadBalancer.PublicInterface,
+			"publicInterface can only be disabled if hcloudNetwork.enabled is true"))
+	}
+
+	return allErrs
 }
 
 // validateLoadBalancerHealthCheck rejects HTTP(S)-only fields set while the health check protocol

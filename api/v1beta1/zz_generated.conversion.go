@@ -2675,6 +2675,7 @@ func autoConvert_v1beta1_LoadBalancerSpec_To_v1beta2_LoadBalancerSpec(in *LoadBa
 	} else {
 		out.HealthCheck = nil
 	}
+	out.PublicInterface = v1beta2.LoadBalancerPublicInterface(in.PublicInterface)
 	return nil
 }
 
@@ -2716,6 +2717,7 @@ func autoConvert_v1beta2_LoadBalancerSpec_To_v1beta1_LoadBalancerSpec(in *v1beta
 	} else {
 		out.HealthCheck = nil
 	}
+	out.PublicInterface = LoadBalancerPublicInterface(in.PublicInterface)
 	return nil
 }
 

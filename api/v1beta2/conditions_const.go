@@ -35,6 +35,8 @@ const (
 	LoadBalancerWaitingToActivateProxyProtocolV1Beta1Reason = "LoadBalancerWaitingToActivateProxyProtocol"
 	// LoadBalancerWaitingToActivateHTTPHealthCheckV1Beta1Reason used while the switch to an http health check waits for all control-plane machines to be annotated.
 	LoadBalancerWaitingToActivateHTTPHealthCheckV1Beta1Reason = "LoadBalancerWaitingToActivateHTTPHealthCheck"
+	// LoadBalancerWaitingForNetworkV1Beta1Reason used while a load balancer without public interface waits for the network.
+	LoadBalancerWaitingForNetworkV1Beta1Reason = "LoadBalancerWaitingForNetwork"
 )
 
 const (
@@ -350,6 +352,9 @@ const (
 	// HetznerClusterLoadBalancerWaitingToActivateHTTPHealthCheckReason indicates that the switch to an http
 	// health check is waiting for all control-plane machines to be annotated.
 	HetznerClusterLoadBalancerWaitingToActivateHTTPHealthCheckReason = "WaitingToActivateHTTPHealthCheck"
+	// HetznerClusterLoadBalancerWaitingForNetworkReason indicates that a load balancer without public interface
+	// is waiting for the network, either before it is created or before its public interface is disabled.
+	HetznerClusterLoadBalancerWaitingForNetworkReason = "WaitingForNetwork"
 )
 
 const (

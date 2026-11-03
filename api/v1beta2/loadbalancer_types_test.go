@@ -61,3 +61,17 @@ var _ = Describe("LoadBalancerSpec target address family", func() {
 		),
 	)
 })
+
+var _ = Describe("LoadBalancerSpec public interface", func() {
+	DescribeTable("PublicInterfaceDisabled",
+		func(configured LoadBalancerPublicInterface, expected bool) {
+			spec := LoadBalancerSpec{PublicInterface: configured}
+			Expect(spec.PublicInterfaceDisabled()).To(Equal(expected))
+		},
+		Entry("an unset field keeps the public interface", LoadBalancerPublicInterface(""), false),
+		Entry("enabled keeps the public interface", LoadBalancerPublicInterfaceEnabled, false),
+		Entry("disabled turns the public interface off", LoadBalancerPublicInterfaceDisabled, true),
+		// Only an explicit disabled may remove the public interface.
+		Entry("an unknown value keeps the public interface", LoadBalancerPublicInterface("off"), false),
+	)
+})

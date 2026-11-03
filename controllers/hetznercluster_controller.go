@@ -308,10 +308,30 @@ func reconcileInfrastructure(ctx context.Context, clusterScope *scope.ClusterSco
 	return reconcile.Result{}, nil
 }
 
+// defaultControlPlaneEndpointHost returns the load balancer address that spec.controlPlaneEndpoint.host
+// defaults to. That is the private IP if the load balancer has no public interface, and the public
+// IPv4 address otherwise. It returns an empty string while that address is not known yet.
+func defaultControlPlaneEndpointHost(hetznerCluster *infrav1.HetznerCluster) string {
+	lbStatus := hetznerCluster.Status.ControlPlaneLoadBalancer
+	if lbStatus == nil {
+		return ""
+	}
+
+	host := lbStatus.IPv4
+	if hetznerCluster.Spec.ControlPlaneLoadBalancer.PublicInterfaceDisabled() {
+		host = lbStatus.InternalIP
+	}
+
+	// Older versions of CAPH wrote "<nil>" to the status when the load balancer had no IP.
+	if host == "<nil>" {
+		return ""
+	}
+	return host
+}
+
 func processControlPlaneEndpoint(hetznerCluster *infrav1.HetznerCluster) {
 	if ptr.Deref(hetznerCluster.Spec.ControlPlaneLoadBalancer.Enabled, false) {
-		if hetznerCluster.Status.ControlPlaneLoadBalancer != nil && hetznerCluster.Status.ControlPlaneLoadBalancer.IPv4 != "<nil>" {
-			defaultHost := hetznerCluster.Status.ControlPlaneLoadBalancer.IPv4
+		if defaultHost := defaultControlPlaneEndpointHost(hetznerCluster); defaultHost != "" {
 			defaultPort := hetznerCluster.Spec.ControlPlaneLoadBalancer.Port
 
 			if hetznerCluster.Spec.ControlPlaneEndpoint.Host == "" {

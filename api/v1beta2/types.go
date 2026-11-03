@@ -68,6 +68,21 @@ const (
 	LoadBalancerTargetAddressFamilyDualStack = LoadBalancerTargetAddressFamily("dualstack")
 )
 
+// LoadBalancerPublicInterface defines whether the public network interface of a load
+// balancer is enabled.
+// +kubebuilder:validation:Enum=enabled;disabled
+type LoadBalancerPublicInterface string
+
+const (
+	// LoadBalancerPublicInterfaceEnabled enables the public interface. The load balancer
+	// then has a public IPv4 and IPv6 address and can be reached from the internet.
+	LoadBalancerPublicInterfaceEnabled = LoadBalancerPublicInterface("enabled")
+
+	// LoadBalancerPublicInterfaceDisabled disables the public interface. The load balancer
+	// can then only be reached over the private network it is attached to.
+	LoadBalancerPublicInterfaceDisabled = LoadBalancerPublicInterface("disabled")
+)
+
 // HCloudAlgorithmType converts LoadBalancerAlgorithmType to hcloud type.
 func (algorithmType *LoadBalancerAlgorithmType) HCloudAlgorithmType() hcloud.LoadBalancerAlgorithmType {
 	switch *algorithmType {
@@ -420,6 +435,34 @@ type LoadBalancerSpec struct {
 	// not undo that check.
 	// +optional
 	HealthCheck *LoadBalancerHealthCheckSpec `json:"healthCheck,omitempty"`
+
+	// publicInterface controls the public network interface of the load balancer. One of enabled or
+	// disabled.
+	//
+	// Hetzner firewalls do not apply to load balancers. With the public interface enabled, the
+	// kube-apiserver port of the load balancer is therefore reachable from the internet. Set
+	// disabled to create the load balancer without a public IPv4 and IPv6 address, so that it is
+	// only reachable over the private network of the cluster. This requires hcloudNetwork.enabled, because
+	// Hetzner only accepts a load balancer without public interface if it is attached to a
+	// network. Every client of the kube-apiserver then has to reach the load balancer over that
+	// network, and this includes the controllers in the management cluster, for example through
+	// a VPN or a management cluster that runs in the same network.
+	//
+	// If controlPlaneEndpoint.host is empty, CAPH sets it to the private IP of the load balancer instead of its
+	// public IPv4 address. A host that is already set is never changed.
+	//
+	// The value can be changed on an existing cluster. CAPH then enables or disables the public
+	// interface of the existing load balancer in place. A disable waits until the load balancer
+	// is attached to the network. CAPH does not change controlPlaneEndpoint, the certificate SANs of
+	// the kube-apiserver or the kubeconfig secret. When an existing cluster switches to disabled,
+	// these still point to the public IPv4 address and have to be migrated by the user.
+	//
+	// Not set means that a new load balancer gets a public interface, as before this field
+	// existed, and that CAPH does not change the public interface of an existing load balancer.
+	// A load balancer that was set up without a public interface outside of CAPH (see name)
+	// therefore keeps it disabled.
+	// +optional
+	PublicInterface LoadBalancerPublicInterface `json:"publicInterface,omitempty"`
 }
 
 // TargetAddressFamilyOrDefault returns the address family to use for the "ip" targets of
@@ -452,6 +495,13 @@ func (spec LoadBalancerSpec) WantsIPv4() bool {
 func (spec LoadBalancerSpec) WantsIPv6() bool {
 	family := spec.TargetAddressFamilyOrDefault()
 	return family == LoadBalancerTargetAddressFamilyIPv6 || family == LoadBalancerTargetAddressFamilyDualStack
+}
+
+// PublicInterfaceDisabled reports whether the load balancer should run without a public
+// interface. Only the value disabled turns it off. Not set and any other value keep the
+// public interface, which is the behavior before the field existed.
+func (spec LoadBalancerSpec) PublicInterfaceDisabled() bool {
+	return spec.PublicInterface == LoadBalancerPublicInterfaceDisabled
 }
 
 // LoadBalancerHealthCheckSpec configures the health check a load balancer service uses. Field

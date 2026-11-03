@@ -171,14 +171,18 @@ func (c *cacheHCloudClient) CreateLoadBalancer(_ context.Context, opts hcloud.Lo
 		Algorithm:        *opts.Algorithm,
 		LoadBalancerType: opts.LoadBalancerType,
 		Location:         opts.Location,
-		PublicNet: hcloud.LoadBalancerPublicNet{
+	}
+	// Like the HCloud API, a load balancer without public interface gets no public IPs.
+	if opts.PublicInterface == nil || *opts.PublicInterface {
+		lb.PublicNet = hcloud.LoadBalancerPublicNet{
+			Enabled: true,
 			IPv4: hcloud.LoadBalancerPublicNetIPv4{
 				IP: net.IP("1.2.3.4"),
 			},
 			IPv6: hcloud.LoadBalancerPublicNetIPv6{
 				IP: net.IP("2001:db8::1"),
 			},
-		},
+		}
 	}
 	if opts.Network != nil {
 		lb.PrivateNet = append(lb.PrivateNet, hcloud.LoadBalancerPrivateNet{
@@ -310,6 +314,35 @@ func (c *cacheHCloudClient) UpdateLoadBalancer(_ context.Context, lb *hcloud.Loa
 	}
 
 	return c.loadBalancerCache.idMap[lb.ID], nil
+}
+
+func (c *cacheHCloudClient) EnableLoadBalancerPublicInterface(_ context.Context, lb *hcloud.LoadBalancer) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	// Check if loadBalancer exists
+	if _, found := c.loadBalancerCache.idMap[lb.ID]; !found {
+		return hcloud.Error{Code: hcloud.ErrorCodeNotFound, Message: "not found"}
+	}
+
+	c.loadBalancerCache.idMap[lb.ID].PublicNet.Enabled = true
+	return nil
+}
+
+func (c *cacheHCloudClient) DisableLoadBalancerPublicInterface(_ context.Context, lb *hcloud.LoadBalancer) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	// Check if loadBalancer exists
+	if _, found := c.loadBalancerCache.idMap[lb.ID]; !found {
+		return hcloud.Error{Code: hcloud.ErrorCodeNotFound, Message: "not found"}
+	}
+
+	// Like the HCloud API, the public interface can only be disabled on an attached load balancer.
+	if len(c.loadBalancerCache.idMap[lb.ID].PrivateNet) == 0 {
+		return hcloud.Error{Code: hcloud.ErrorCodeLoadBalancerNotAttachedToNetwork, Message: "load balancer not attached to a network"}
+	}
+
+	c.loadBalancerCache.idMap[lb.ID].PublicNet.Enabled = false
+	return nil
 }
 
 func (c *cacheHCloudClient) AddTargetServerToLoadBalancer(_ context.Context, opts hcloud.LoadBalancerAddServerTargetOpts, lb *hcloud.LoadBalancer) error {

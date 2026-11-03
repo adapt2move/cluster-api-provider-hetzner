@@ -247,3 +247,86 @@ func TestHetznerClusterTemplateValidateUpdateUnsetFields(t *testing.T) {
 	_, err = webhook.ValidateUpdate(context.Background(), template(stored), template(changed))
 	require.ErrorContains(t, err, "HetznerClusterTemplate.Spec is immutable")
 }
+
+// TestValidatePublicInterface checks that a load balancer without public interface needs an enabled
+// load balancer and the private network, on create and on update.
+func TestValidatePublicInterface(t *testing.T) {
+	webhook := &HetznerClusterWebhook{}
+	cluster := func(lbEnabled, networkEnabled bool, publicInterface infrav1.LoadBalancerPublicInterface) *infrav1.HetznerCluster {
+		c := validHetznerCluster(infrav1.LoadBalancerSpec{
+			Enabled:         ptr.To(lbEnabled),
+			Region:          "fsn1",
+			PublicInterface: publicInterface,
+		})
+		c.Spec.ControlPlaneRegions = []infrav1.Region{"fsn1"}
+		c.Spec.HCloudNetwork.Enabled = ptr.To(networkEnabled)
+		if !lbEnabled {
+			c.Spec.ControlPlaneEndpoint = infrav1.APIEndpoint{Host: "example.com", Port: 6443}
+		}
+		return c
+	}
+
+	tests := []struct {
+		name    string
+		cluster *infrav1.HetznerCluster
+		wantErr string
+	}{
+		{name: "not set without network is accepted", cluster: cluster(true, false, "")},
+		{name: "enabled without network is accepted", cluster: cluster(true, false, infrav1.LoadBalancerPublicInterfaceEnabled)},
+		{name: "disabled with network is accepted", cluster: cluster(true, true, infrav1.LoadBalancerPublicInterfaceDisabled)},
+		{
+			name:    "disabled without network is rejected",
+			cluster: cluster(true, false, infrav1.LoadBalancerPublicInterfaceDisabled),
+			wantErr: "publicInterface can only be disabled if hcloudNetwork.enabled is true",
+		},
+		{
+			name:    "disabled without load balancer is rejected",
+			cluster: cluster(false, true, infrav1.LoadBalancerPublicInterfaceDisabled),
+			wantErr: "publicInterface can only be disabled if controlPlaneLoadBalancer.enabled is true",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run("create: "+tt.name, func(t *testing.T) {
+			_, err := webhook.ValidateCreate(context.Background(), tt.cluster)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+		t.Run("update: "+tt.name, func(t *testing.T) {
+			_, err := webhook.ValidateUpdate(context.Background(), tt.cluster, tt.cluster)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestValidateUpdatePublicInterfaceToggle checks that the public interface can be switched in both
+// directions on an existing cluster, and that disabling it warns about an endpoint that is not changed.
+func TestValidateUpdatePublicInterfaceToggle(t *testing.T) {
+	webhook := &HetznerClusterWebhook{}
+	cluster := func(publicInterface infrav1.LoadBalancerPublicInterface) *infrav1.HetznerCluster {
+		c := validHetznerCluster(infrav1.LoadBalancerSpec{Enabled: ptr.To(true), PublicInterface: publicInterface})
+		c.Spec.HCloudNetwork.Enabled = ptr.To(true)
+		c.Spec.ControlPlaneEndpoint = infrav1.APIEndpoint{Host: "1.2.3.4", Port: 6443}
+		return c
+	}
+
+	warnings, err := webhook.ValidateUpdate(context.Background(), cluster(""), cluster(infrav1.LoadBalancerPublicInterfaceDisabled))
+	require.NoError(t, err)
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], `spec.controlPlaneEndpoint.host "1.2.3.4" is not changed`)
+
+	warnings, err = webhook.ValidateUpdate(context.Background(), cluster(infrav1.LoadBalancerPublicInterfaceDisabled), cluster(infrav1.LoadBalancerPublicInterfaceDisabled))
+	require.NoError(t, err)
+	require.Empty(t, warnings)
+
+	warnings, err = webhook.ValidateUpdate(context.Background(), cluster(infrav1.LoadBalancerPublicInterfaceDisabled), cluster(infrav1.LoadBalancerPublicInterfaceEnabled))
+	require.NoError(t, err)
+	require.Empty(t, warnings)
+}

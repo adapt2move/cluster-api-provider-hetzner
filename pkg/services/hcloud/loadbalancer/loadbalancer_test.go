@@ -173,6 +173,28 @@ var _ = Describe("createOptsFromSpec", func() {
 		Expect(createOpts).To(Equal(wantCreateOpts))
 	})
 
+	It("creates the load balancer without public interface when it is disabled", func() {
+		hetznerCluster.Spec.ControlPlaneLoadBalancer.PublicInterface = infrav1.LoadBalancerPublicInterfaceDisabled
+		wantCreateOpts.PublicInterface = ptr.To(false)
+
+		createOpts := createOptsFromSpec(hetznerCluster)
+
+		// ignore random name
+		createOpts.Name = ""
+
+		// Hetzner rejects a load balancer without public interface that is not attached to a network.
+		Expect(createOpts.Network).To(Equal(&hcloud.Network{ID: hetznerCluster.Status.Network.ID}))
+		Expect(createOpts).To(Equal(wantCreateOpts))
+	})
+
+	It("creates the load balancer with public interface when it is explicitly enabled", func() {
+		hetznerCluster.Spec.ControlPlaneLoadBalancer.PublicInterface = infrav1.LoadBalancerPublicInterfaceEnabled
+
+		createOpts := createOptsFromSpec(hetznerCluster)
+
+		Expect(createOpts.PublicInterface).To(Equal(ptr.To(true)))
+	})
+
 	It("uses a zero listen port until the control plane endpoint is filled in", func() {
 		hetznerCluster.Spec.ControlPlaneEndpoint = infrav1.APIEndpoint{}
 
