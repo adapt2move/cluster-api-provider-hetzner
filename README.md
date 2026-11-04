@@ -1,3 +1,29 @@
+> [!NOTE]
+> **Adapt2Move fork.** This fork focuses on private-IP clusters: control plane and nodes only on the
+> Hetzner private network, and an API load balancer without a public interface. It is maintained for
+> our own use and is not intended for upstream contribution.
+>
+> Differences to upstream:
+>
+> - `HetznerCluster.spec.controlPlaneLoadBalancer.publicInterface` (`enabled` | `disabled`). With
+>   `disabled`, CAPH creates the load balancer without public IPs (after the network exists), or
+>   disables the public interface of an existing one in place once it is attached to the network. An
+>   empty `controlPlaneEndpoint.host` then defaults to the private IP of the load balancer; a set host
+>   is never changed. The webhook requires `controlPlaneLoadBalancer.enabled` and
+>   `hcloudNetwork.enabled` for `disabled`. Not set behaves like upstream. See
+>   [the HetznerCluster reference](docs/caph/03-reference/02-hetzner-cluster.md#control-plane-load-balancer-without-public-interface).
+> - The load balancer status contains an empty string instead of `<nil>` for an IP that is not set.
+> - Releases are tagged `vX.Y.Z-a2m.N` on `release-X.Y-a2m` branches (upstream `vX.Y.Z` plus our
+>   changes). `.github/workflows/release-a2m.yaml` pushes the image to `ghcr.io/adapt2move/caph` for
+>   linux/amd64 and linux/arm64 and attaches `infrastructure-components.yaml`, `metadata.yaml` and
+>   the cluster templates to the GitHub release.
+> - Upstream workflows that need syself's registry, secrets or Hetzner test accounts are removed:
+>   the e2e workflows, the scheduled jobs (update bot, image scan, cache cleaner), the builder image
+>   promotion, the staging image build and upstream's release workflow.
+>
+> `main` is upstream `main` plus these changes. Upstream:
+> https://github.com/syself/cluster-api-provider-hetzner
+
 [![Kubernetes Cluster API Provider Hetzner](https://cdn.syself.com/caph.png)](https://syself.com)
 
 <br>
