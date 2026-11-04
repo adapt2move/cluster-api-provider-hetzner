@@ -96,9 +96,12 @@ jobs:
 
       # Uses the Makefile's release target with our image prefix. It writes
       # ghcr.io/adapt2move/caph:<tag> into config/default and builds the
-      # release manifests into out/.
+      # release manifests into out/. IMAGE_PREFIX also names the builder image
+      # that runs controller-gen, so keep that one on upstream's public image.
       - name: Generate release artifacts
-        run: make release RELEASE_TAG="$GITHUB_REF_NAME" IMAGE_PREFIX="$IMAGE_PREFIX"
+        run: |
+          make release RELEASE_TAG="$GITHUB_REF_NAME" IMAGE_PREFIX="$IMAGE_PREFIX" \
+            BUILDER_IMAGE=ghcr.io/syself/caph-builder
 
       - name: Check release artifacts
         run: |
