@@ -13,8 +13,10 @@
 >   `hcloudNetwork.enabled` for `disabled`. Not set behaves like upstream. See
 >   [the HetznerCluster reference](docs/caph/03-reference/02-hetzner-cluster.md#control-plane-load-balancer-without-public-interface).
 > - The load balancer status contains an empty string instead of `<nil>` for an IP that is not set.
-> - Releases are tagged `vX.Y.Z-a2m.N` on `release-X.Y-a2m` branches (upstream `vX.Y.Z` plus our
->   changes). `.github/workflows/release-a2m.yaml` pushes the image to `ghcr.io/adapt2move/caph` for
+> - Releases use plain upstream-style tags. Upstream's tags are kept unchanged; our builds take the
+>   next patch number on `release-X.Y-a2m` branches (`v1.1.11` = upstream `v1.1.10` plus our
+>   changes). If upstream later releases the same number, that tag is a different build: we never
+>   reuse a number and move on to the next free one. Only tags on `release-*-a2m` branches build. `.github/workflows/release-a2m.yaml` pushes the image to `ghcr.io/adapt2move/caph` for
 >   linux/amd64 and linux/arm64 and attaches `infrastructure-components.yaml`, `metadata.yaml` and
 >   the cluster templates to the GitHub release.
 > - Upstream workflows that need syself's registry, secrets or Hetzner test accounts are removed:
