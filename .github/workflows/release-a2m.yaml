@@ -1,0 +1,146 @@
+# Release workflow of the Adapt2Move fork. It replaces upstream's release.yml,
+# which pushes to ghcr.io/syself and needs syself's signing setup.
+#
+# Push a tag vX.Y.Z-a2m.N on a release branch (for example release-1.1-a2m).
+# The workflow builds the manager image for linux/amd64 and linux/arm64, pushes
+# it as ghcr.io/adapt2move/caph:<tag> and publishes a GitHub release of the tag
+# with infrastructure-components.yaml (pointing to that image), metadata.yaml
+# and the cluster templates, as clusterctl and the cluster-api-operator expect.
+name: Release (a2m)
+on: # yamllint disable-line rule:truthy
+  push:
+    tags:
+      - "v*-a2m.*"
+permissions:
+  contents: write
+  packages: write
+env:
+  IMAGE_PREFIX: ghcr.io/adapt2move
+  IMAGE: ghcr.io/adapt2move/caph
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  manager-image:
+    name: Build and push manager image
+    # GitHub-hosted runner: this repository is a public fork and is not part
+    # of the hetzner-ci runner group used by the other adapt2move repositories.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute build flags
+        run: |
+          {
+            echo 'DOCKER_BUILD_LDFLAGS<<EOF'
+            hack/version.sh
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
+
+      # The Dockerfile cross-compiles with GOOS/GOARCH on the build platform,
+      # so no QEMU is needed for linux/arm64.
+      - name: Build and push manager image
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        with:
+          provenance: false
+          context: .
+          file: ./images/caph/Dockerfile
+          push: true
+          build-args: |
+            LDFLAGS=${{ env.DOCKER_BUILD_LDFLAGS }}
+          tags: ${{ env.IMAGE }}:${{ github.ref_name }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.description=Cluster API Provider Hetzner, Adapt2Move fork
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=${{ github.workflow }}
+          cache-to: type=gha,mode=max,scope=${{ github.workflow }}
+
+      - name: Image digest
+        run: echo "${IMAGE}:${GITHUB_REF_NAME}@${{ steps.build.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs:
+      - manager-image
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: "go.mod"
+
+      # Uses the Makefile's release target with our image prefix. It writes
+      # ghcr.io/adapt2move/caph:<tag> into config/default and builds the
+      # release manifests into out/.
+      - name: Generate release artifacts
+        run: make release RELEASE_TAG="$GITHUB_REF_NAME" IMAGE_PREFIX="$IMAGE_PREFIX"
+
+      - name: Check release artifacts
+        run: |
+          set -euo pipefail
+          ls -l out/
+          test -s out/infrastructure-components.yaml
+          test -s out/metadata.yaml
+          want="image: ${IMAGE}:${GITHUB_REF_NAME}"
+          grep -F "$want" out/infrastructure-components.yaml
+          if grep -E 'image: .*ghcr.io/syself/' out/infrastructure-components.yaml; then
+            echo "infrastructure-components.yaml still references an upstream image"
+            exit 1
+          fi
+
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          base="${tag%%-a2m.*}"
+          {
+            echo "Adapt2Move build of Cluster API Provider Hetzner, based on upstream ${base}."
+            echo
+            echo "Image: \`${IMAGE}:${tag}@${{ needs.manager-image.outputs.digest }}\` (linux/amd64, linux/arm64)"
+            echo
+            echo "See the [README](https://github.com/${GITHUB_REPOSITORY}/blob/${tag}/README.md) for the differences to upstream."
+            if git rev-parse -q --verify "refs/tags/${base}" >/dev/null; then
+              echo
+              echo "Changes since upstream ${base}:"
+              echo
+              git log --no-merges --format='- %s (%h)' "${base}..${tag}"
+            fi
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" out/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" out/* --verify-tag \
+              --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+          fi
