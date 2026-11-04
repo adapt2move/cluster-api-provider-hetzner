@@ -1,7 +1,9 @@
 # Release workflow of the Adapt2Move fork. It replaces upstream's release.yml,
 # which pushes to ghcr.io/syself and needs syself's signing setup.
 #
-# Push a tag vX.Y.Z-a2m.N on a release branch (for example release-1.1-a2m).
+# Push a tag vX.Y.Z on a release branch (for example release-1.1-a2m). The fork
+# carries upstream's tags unchanged, so the guard job only lets tags through whose
+# commit is on a release-*-a2m branch; mirrored upstream tags build nothing.
 # The workflow builds the manager image for linux/amd64 and linux/arm64, pushes
 # it as ghcr.io/adapt2move/caph:<tag> and publishes a GitHub release of the tag
 # with infrastructure-components.yaml (pointing to that image), metadata.yaml
@@ -10,7 +12,7 @@ name: Release (a2m)
 on: # yamllint disable-line rule:truthy
   push:
     tags:
-      - "v*-a2m.*"
+      - "v*"
 permissions:
   contents: write
   packages: write
@@ -21,7 +23,30 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  guard:
+    name: Only our release branches
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ours: ${{ steps.check.outputs.ours }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - name: Is the tag on a release-*-a2m branch?
+        id: check
+        run: |
+          if git branch -r --contains "$GITHUB_SHA" | grep -qE '^ *origin/release-[0-9.]+-a2m$'; then
+            echo "ours=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$GITHUB_REF_NAME is not on a release-*-a2m branch (upstream tag), skipping"
+            echo "ours=false" >> "$GITHUB_OUTPUT"
+          fi
+
   manager-image:
+    needs: guard
+    if: needs.guard.outputs.ours == 'true'
     name: Build and push manager image
     # GitHub-hosted runner: this repository is a public fork and is not part
     # of the hetzner-ci runner group used by the other adapt2move repositories.
